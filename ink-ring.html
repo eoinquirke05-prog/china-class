@@ -27,9 +27,14 @@
   var ctx = canvas.getContext('2d');
   var dpr = window.devicePixelRatio || 1;
 
-  function draw() {
-    var w = window.innerWidth;
-    var h = window.innerHeight;
+  var w, h, cx, cy;
+
+  // Lay down the full rice-paper cream ground. Done once on start and on
+  // resize; the animation loop never fully clears it again, so ink trails
+  // fade gently into this base instead of vanishing.
+  function paintGround() {
+    w = window.innerWidth;
+    h = window.innerHeight;
 
     canvas.width = w * dpr;
     canvas.height = h * dpr;
@@ -37,77 +42,94 @@
     canvas.style.height = h + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    cx = w / 2;
+    cy = h / 2;
+
     // Warm rice-paper cream background
     ctx.fillStyle = '#f4ecdb';
     ctx.fillRect(0, 0, w, h);
 
     // A faint, uneven paper tone so the cream feels warm, not flat
     var paper = ctx.createRadialGradient(
-      w / 2, h / 2, Math.min(w, h) * 0.1,
-      w / 2, h / 2, Math.max(w, h) * 0.75
+      cx, cy, Math.min(w, h) * 0.1,
+      cx, cy, Math.max(w, h) * 0.75
     );
     paper.addColorStop(0, 'rgba(255, 250, 238, 0.55)');
     paper.addColorStop(1, 'rgba(226, 214, 190, 0.35)');
     ctx.fillStyle = paper;
     ctx.fillRect(0, 0, w, h);
+  }
 
-    var cx = w / 2;
-    var cy = h / 2;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
 
-    // Keep the ring modest so there is lots of calm empty space around it
-    var radius = Math.min(w, h) * 0.22;
+  // Soft ink wash: several translucent strokes, from a wide diffuse halo
+  // down to a darker core, so the edge bleeds like a wet brush. Widths are
+  // fractions of the current radius, resolved each frame.
+  var layers = [
+    { wf: 0.42, color: 'rgba(20, 18, 16, 0.05)' },
+    { wf: 0.30, color: 'rgba(20, 18, 16, 0.07)' },
+    { wf: 0.20, color: 'rgba(18, 16, 14, 0.10)' },
+    { wf: 0.12, color: 'rgba(15, 13, 12, 0.16)' },
+    { wf: 0.07, color: 'rgba(12, 10, 9, 0.26)' },
+    { wf: 0.035, color: 'rgba(10, 9, 8, 0.42)' },
+    { wf: 0.018, color: 'rgba(8, 7, 6, 0.62)' }
+  ];
 
-    // Pre-compute a wobbly, slightly-irregular outline once so every
-    // ink layer traces the same hand-drawn path.
-    var steps = 240;
-    var seed = 7.13;
-    var pts = [];
+  var steps = 240;
+  var seed = 7.13;
+
+  function frame(now) {
+    // Time in seconds, for slow, calm motion.
+    var t = now * 0.001;
+
+    // THE TRICK: instead of clearing, wash a near-transparent sheet of the
+    // rice-paper cream over the whole canvas. Each frame the previous ink is
+    // nudged a little closer to the paper tone, so the breathing ring leaves
+    // soft silk trails that dissolve rather than a hard-edged smear.
+    ctx.fillStyle = 'rgba(244, 236, 219, 0.06)';
+    ctx.fillRect(0, 0, w, h);
+
+    // Breathe: the base radius swells and contracts on a slow ~9s cycle,
+    // with a gentler second cycle layered in so the pulse never feels
+    // mechanically periodic.
+    var base = Math.min(w, h) * 0.22;
+    var pulse =
+      Math.sin(t * (2 * Math.PI / 9)) * 0.045 +
+      Math.sin(t * (2 * Math.PI / 5.3) + 1.1) * 0.018;
+    var radius = base * (1 + pulse);
+
+    // Trace the wobbly outline; the wobble phases drift with time so the
+    // edge slowly writhes like wet ink settling, never repeating exactly.
+    ctx.beginPath();
     for (var i = 0; i <= steps; i++) {
       var a = (i / steps) * Math.PI * 2;
-      // Layered sines = organic, non-repeating wobble (no perfect circle)
+      // Layered sines = organic wobble; the small time terms animate it.
       var wobble =
-        Math.sin(a * 3 + seed) * 0.020 +
-        Math.sin(a * 5 - seed * 1.7) * 0.012 +
-        Math.sin(a * 8 + seed * 0.4) * 0.007 +
-        Math.sin(a * 13 - seed) * 0.004;
+        Math.sin(a * 3 + seed + t * 0.25) * 0.020 +
+        Math.sin(a * 5 - seed * 1.7 - t * 0.17) * 0.012 +
+        Math.sin(a * 8 + seed * 0.4 + t * 0.31) * 0.007 +
+        Math.sin(a * 13 - seed + t * 0.13) * 0.004;
       var r = radius * (1 + wobble);
-      pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+      var x = cx + Math.cos(a) * r;
+      var y = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     }
-
-    function tracePath() {
-      ctx.beginPath();
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (var j = 1; j < pts.length; j++) {
-        ctx.lineTo(pts[j][0], pts[j][1]);
-      }
-      ctx.closePath();
-    }
-
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-
-    // Soft ink wash: several translucent strokes, from a wide diffuse
-    // halo down to a darker core, so the edge bleeds like a wet brush.
-    var layers = [
-      { width: radius * 0.42, color: 'rgba(20, 18, 16, 0.05)' },
-      { width: radius * 0.30, color: 'rgba(20, 18, 16, 0.07)' },
-      { width: radius * 0.20, color: 'rgba(18, 16, 14, 0.10)' },
-      { width: radius * 0.12, color: 'rgba(15, 13, 12, 0.16)' },
-      { width: radius * 0.07, color: 'rgba(12, 10, 9, 0.26)' },
-      { width: radius * 0.035, color: 'rgba(10, 9, 8, 0.42)' },
-      { width: radius * 0.018, color: 'rgba(8, 7, 6, 0.62)' }
-    ];
+    ctx.closePath();
 
     for (var k = 0; k < layers.length; k++) {
       ctx.strokeStyle = layers[k].color;
-      ctx.lineWidth = layers[k].width;
-      tracePath();
+      ctx.lineWidth = radius * layers[k].wf;
       ctx.stroke();
     }
+
+    requestAnimationFrame(frame);
   }
 
-  draw();
-  window.addEventListener('resize', draw);
+  paintGround();
+  window.addEventListener('resize', paintGround);
+  requestAnimationFrame(frame);
 })();
 </script>
 </body>
